@@ -1,22 +1,20 @@
 /*
  * $Id$
  *
- * ward v1.0 - classic war dialer
+ * ward v1.2 - Classic War Dialer with GSM enhancements
  * Copyright (c) 2001 Raptor <raptor@0xdeadbeef.eu.org>
  *
- * WARD is a classic war dialer: it scans a list
- * of phone numbers, finding the ones where a modem
- * is answering the call. Wargames still r0cks.
- * WARD can generate phone numbers lists based on
- * a user-supplied mask, in incremental or random
- * order. Remember to change some defines to make
- * it fit your current system configuration.
+ * WARD is a classic war dialer: it scans a list of phone numbers, finding 
+ * the ones where a modem is answering the call. Wargames still r0cks.
+ * WARD can generate phone numbers lists based on a user-supplied mask, in 
+ * incremental or random order, providing a nicely formatted output. 
+ * Remember to change some defines to make it fit your current configuration. 
  *
- * Inspired to the old sordial.c (thanx sorbo!).
- * Thanx also to Megat0n for his termios advice.
+ * Program inspired to the old sordial.c (thanx sorbo!).
+ * Many thanx also go to Megat0n for his termios advice.
  *
  * Tested on Linux. Compile with gcc ward.c -o ward -lm.
- * OpenBSD still have some problems with non-gsm modems.
+ * OpenBSD still have problems with some non-gsm modems.
  *
  * FOR EDUCATIONAL PURPOSES.
  *
@@ -36,7 +34,7 @@
 #include <math.h>
 #include <string.h>
 
-#define VERSION         "1.0"
+#define VERSION         "1.2"
 #define AUTHOR          "Raptor"
 #define MAIL_SUPPORT    "<raptor@0xdeadbeef.eu.org>"
 
@@ -45,6 +43,14 @@
 #define OPT_GENERATE   	0x04
 #define OPT_SCAN	0x08
 #define OPT_TIMEOUT   	0x10
+
+/* Color definitions */
+#define GREEN 		"\E[32m\E[1m"
+#define YELLOW 		"\E[33m\E[1m"
+#define RED		"\E[31m\E[1m"
+#define BLUE		"\E[34m\E[1m"
+#define BRIGHT  	"\E[m\E[1m"
+#define NORMAL  	"\E[m"
 
 /* Local setup - change if needed */
 #define MODEM_DEV 	"/dev/modem"
@@ -84,6 +90,12 @@ int main(int argc, char **argv)
 /* Disable buffering for stdout */
 	setvbuf(stdout, NULL, _IONBF, 0);
 
+/* Print header */
+        fprintf(stderr,
+		"%s\nWARD %s -- Classic War Dialer with GSM enhancements\n"
+		"Copyright (c) 2001 %s %s\n\n%s", BLUE, VERSION, AUTHOR, 
+		MAIL_SUPPORT, NORMAL);
+
 /* Parse command line */
 	if (argc < 2) usage(argv[0]);
 
@@ -119,12 +131,11 @@ int main(int argc, char **argv)
 		}			
 	}		
 
-
 /* Input control */
-	if (!(opt_line&OPT_GENERATE) && !(opt_line&OPT_SCAN))
+	if (!(opt_line & OPT_GENERATE) && !(opt_line & OPT_SCAN))
 		fatalerr("err: please select an action [generate or scan]");
 	
-	if ((opt_line&OPT_GENERATE) && (opt_line&OPT_SCAN))
+	if ((opt_line & OPT_GENERATE) && (opt_line & OPT_SCAN))
 		fatalerr("err: select only one action [generate or scan]");
 
 	if (!*nfile)
@@ -136,9 +147,9 @@ int main(int argc, char **argv)
 
 
 /* List generation mode */
-	if (opt_line&OPT_GENERATE) {
+	if (opt_line & OPT_GENERATE) {
 
-		if (!(opt_line&OPT_NMASK) || !*nmask)
+		if (!(opt_line & OPT_NMASK) || !*nmask)
 			fatalerr("err: -n/--nmask <arg> is required with -g");
 
 		listgen(nmask, incr, nfile);
@@ -156,7 +167,7 @@ int main(int argc, char **argv)
 void scan(char *nfile) /* Scanner engine */
 {
 	FILE * f;
-	char n[MAX_NUM_LEN], status[10], c[2];
+	char n[MAX_NUM_LEN], status[80], c[2];
 	int size = 1, result;
 
 	bzero(n, MAX_NUM_LEN);
@@ -171,13 +182,13 @@ void scan(char *nfile) /* Scanner engine */
 	if ((fd = initmodem(MODEM_DEV)) < 0)
 		fatalerr("err: unable to open %s", MODEM_DEV);
 
-        fprintf(stderr,"WARD %s: classic war dialer\nCopyright (c) 2001 %s %s\n\n",VERSION,AUTHOR,MAIL_SUPPORT);
-	fprintf(stdout, "Starting scan engine...\n");
-	fprintf(stdout, "Resetting modem...\n");
+	fprintf(stdout, "%s[*]%s Starting scan engine...\n", BRIGHT, NORMAL);
+	fprintf(stdout, "%s[*]%s Resetting modem...\n", BRIGHT, NORMAL);
 
-        sendcmd(fd, 2, "ATZ\r");
+        sendcmd(fd, 1, "ATZ\r");
 
-	fprintf(stdout, "Done.                         \n");
+	fprintf(stdout, "%s[*]%s Done.                         \n\n", BRIGHT, NORMAL);
+	fprintf(stdout, "%s[*]%s Scan starting...                      \n", BRIGHT, NORMAL);
 
                     
 /* Parse the numbers file */
@@ -231,9 +242,10 @@ void scan(char *nfile) /* Scanner engine */
 	}
 
 /* Scan finished */
-	fprintf(stdout, "Scan terminated.                    \n");
-	sendcmd(fd, 2, "+++ATH0\r");
-	sendcmd(fd, 2, "ATZ\r");
+	fprintf(stdout, "%s[*]%s Scan terminated.                    \n\n",
+		BRIGHT, NORMAL);
+	sendcmd(fd, 1, "+++ATH0\r");
+	sendcmd(fd, 1, "ATZ\r");
 	closemodem(fd);
 
 	return;
@@ -264,12 +276,12 @@ int dial(char *number) /* Actually dial a phone number */
 
 /* Modem hangup */
 	fprintf(stdout, "Hanging up...             \r");
-	sendcmd(fd, 2, "ATH0\r");
+	sendcmd(fd, 1, "ATH0\r");
 
         fprintf(stdout, "Dialing: %s (%i)        \r", number, timeout);
 	
 /* Create dial command string */
-	sendcmd(fd, 2, "ATM0DT%s\r", number); /* modem volume set to 0 */
+	sendcmd(fd, 1, "ATM0DT%s\r", number); /* modem volume set to 0 */
 
 	for (i = timeout; i > 0; i--) {
 
@@ -278,15 +290,23 @@ int dial(char *number) /* Actually dial a phone number */
 		if ((rd = read(fd, buf, 23))) {
 
 			if (strstr(buf, "CONNECT") != NULL) {
-				fprintf(stdout, "CONNECT: %s		 \n", number);
+				fprintf(stdout, "%sCONNECT: %s\n%s", 
+					GREEN, number, NORMAL);
 
-				sendcmd(fd, 2, "+++");
+				sendcmd(fd, 1, "+++");
 
 				return(1); /* CONNECT */
 			}
 
-			if (strstr(buf, "BUSY") != NULL) 
+			if (strstr(buf, "BUSY") != NULL) {
+				fprintf(stdout, "%sBUSY:    %s\n%s", 
+					YELLOW, number, NORMAL);
+
 				return(2); /* BUSY */
+			}
+
+			if ((strstr(buf, "NO") != NULL) && (timeout - i < 3))
+				fatalerr("err: NO CARRIER, possible line problem?"); /* Line problems */
 
 		}
 		sleep(1);
@@ -304,7 +324,7 @@ void writefile(int last, int incr, char *nfile) /* Write list to file */
 	if ((f = fopen(nfile, "a")) == NULL)
 		fatalerr("err: unable to open file %s", nfile);
 	
-	fprintf(stdout, "Writing numbers to file...\n");
+	fprintf(stdout, "%s[*]%s Writing numbers to file...\n", BRIGHT, NORMAL);
 
 /* Use incremental mode writing to file */
 	if (incr)
@@ -315,7 +335,7 @@ void writefile(int last, int incr, char *nfile) /* Write list to file */
 
 			fwrite("\tUNSCANNED\n", 1, 11, f); /* mark as new */
 
-                        fprintf(stdout, "%d numbers left       \r", last - i);
+                        fprintf(stdout, "[ ] %d numbers left       \r", last - i);
 		}
 
 /* Use random mode (pHEAR) */
@@ -323,14 +343,14 @@ void writefile(int last, int incr, char *nfile) /* Write list to file */
 		int j;
 		struct timeval rnd;
 
-		while(last) {
+		while (last) {
 
 /* Strong pseudo-random numbers generator */
 			gettimeofday(&rnd, NULL);
 			srand(rnd.tv_usec);
 
 /* Some voodoo magic */
-	                j= 0 + (int)((last + 0.0) * rand()/(RAND_MAX + 1.0));
+	                j = 0 + (int)((last + 0.0) * rand()/(RAND_MAX + 1.0));
 			
                         if(!fwrite(numbers[j], 1, strlen(numbers[j]), f))
 				fatalerr("err: unable to write to file %s", nfile);
@@ -344,7 +364,7 @@ void writefile(int last, int incr, char *nfile) /* Write list to file */
 		}		  
 
 	}				
-	fprintf(stdout, "Done.                 \n");
+	fprintf(stdout, "%s[*]%s Done.                 \n\n", BRIGHT, NORMAL);
 
 	return;
 }		
@@ -367,15 +387,14 @@ void listgen(char *nmask, int incr, char *nfile) /* List generator engine */
 		}
 	}
 	
-	if (!nextx) 
-		fatalerr("err: only 1 possible number, dial it by hand");
+	if ((!nextx) || (nextx > 4))
+		fatalerr("err: please specify 1 to 4 x's");
 
 	tot_numbers = pow(10, nextx);
 	numbers = (char **)malloc(tot_numbers * sizeof(char *));
 
 /* Fill the numbers array with all possibilities */
-        fprintf(stderr,"WARD %s: classic war dialer\nCopyright (c) 2001 %s %s\n\n",VERSION,AUTHOR,MAIL_SUPPORT);
-	fprintf(stdout, "Generating number list...\n");
+	fprintf(stdout, "%s[*]%s Generating numbers list...\n", BRIGHT, NORMAL);
 
 	for (i = 0; i < tot_numbers; i++) {
 
@@ -491,8 +510,8 @@ void sendcmd(int fd, int timewait, char * fmt,...) /* Send command to modem */
 void cleanup(int ignored) /* SIGINT handler, close modem */
 {
 	if (fd) {
-		sendcmd(fd, 2, "+++ATH0\r");
-		sendcmd(fd, 2, "ATZ\r");
+		sendcmd(fd, 1, "+++ATH0\r");
+		sendcmd(fd, 1, "ATZ\r");
 		closemodem(fd);
 	}
 
@@ -507,9 +526,9 @@ void fatalerr(char * pattern,...) /* Error handling routine */
         va_list ap;
         va_start(ap, pattern);
 
-        fprintf(stderr,"ward-");
+        fprintf(stderr,"%sward-", RED);
         vfprintf(stderr,pattern,ap);
-        fprintf(stderr," (exit forced).\n");
+        fprintf(stderr," (exit forced).\n\n%s", NORMAL);
 
         va_end(ap);
 
@@ -520,20 +539,23 @@ void fatalerr(char * pattern,...) /* Error handling routine */
 
 void usage(char * name) /* Print usage */
 {
-        fprintf(stderr,"WARD %s: classic war dialer\nCopyright (c) 2001 %s %s\n\n",VERSION,AUTHOR,MAIL_SUPPORT);
         fprintf (stderr, 
-		"usage: %s -g <file> -n <nmask> [-r]\t(generation mode)\n"
-        	"       %s -s <file> [-t <timeout>]\t\t(scan mode)\n\n", name, name);
+		"%sUsage%s:\n"
+		"\t%s -g <file> -n <nmask> [-r]\t(Generation mode)\n"
+        	"\t%s -s <file> [-t <timeout>] \t(Scan mode)\n\n", 
+		BRIGHT, NORMAL, name, name);
 
         fprintf (stderr,
-		"In generation mode:\n"
-                "     -g  generate number list and save it to file\n"
-                "     -n  number mask to be used in generation mode\n"
-                "     -r  toggle random mode ON\n\n"
-		"In scan mode:\n"
-                "     -s  scan a list of phone numbers from file\n"
-                "     -t  set the modem timeout (default=%dsecs)\n\n"
-                "     -h  print this help\n", timeout);
+		"%sGeneration mode%s:\n"
+                "\t-g  generate number list and save it to file\n"
+                "\t-n  number mask to be used in generation mode\n"
+                "\t-r  toggle random mode ON\n\n"
+		"%sScan mode%s:\n"
+                "\t-s  scan a list of phone numbers from file\n"
+                "\t-t  set the modem timeout (default=%dsecs)\n\n"
+		"%sHelp%s:\n"
+                "\t-h  print this help\n\n", BRIGHT, NORMAL, BRIGHT, NORMAL, 
+		timeout, BRIGHT, NORMAL);
 
         exit (0);
 }
