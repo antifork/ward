@@ -1,20 +1,21 @@
 /*
  * $Id$
  *
- * ward v1.2 - Classic War Dialer with GSM enhancements
+ * ward v1.7 - Classic War Dialer with GSM enhancements
  * Copyright (c) 2001 Raptor <raptor@0xdeadbeef.eu.org>
  *
- * WARD is a classic war dialer: it scans a list of phone numbers, finding 
- * the ones where a modem is answering the call. Wargames still r0cks.
- * WARD can generate phone numbers lists based on a user-supplied mask, in 
- * incremental or random order, providing a nicely formatted output. 
- * Remember to change some defines to make it fit your current configuration. 
+ * WARD is a classic "War Dialer": it scans a list of phone numbers, 
+ * finding the ones where a modem is answering the call on the other
+ * end and providing a nicely formatted output of the scan results.
+ * WARD can generate phone numbers lists based on a user-supplied 
+ * mask, in incremental or random order. WARD is one of the fastest 
+ * PBX scanners around (and possibly the best for UNIX environment).
+ * Remember to change some defines to make it fit your configuration. 
  *
  * Program inspired to the old sordial.c (thanx sorbo!).
  * Many thanx also go to Megat0n for his termios advice.
  *
- * Tested on Linux. Compile with gcc ward.c -o ward -lm.
- * OpenBSD still have problems with some non-gsm modems.
+ * Tested on Linux and OpenBSD. Compile with gcc ward.c -o ward -lm.
  *
  * FOR EDUCATIONAL PURPOSES.
  *
@@ -34,7 +35,7 @@
 #include <math.h>
 #include <string.h>
 
-#define VERSION         "1.2"
+#define VERSION         "1.7"
 #define AUTHOR          "Raptor"
 #define MAIL_SUPPORT    "<raptor@0xdeadbeef.eu.org>"
 
@@ -57,16 +58,18 @@
 #define MODEM_SPEED 	B9600
 #define MODEM_TIMEOUT 	60
 #define MAX_NUM_LEN 	15
+#define MAX_RETRIES 	2
 /* Local setup end */
 
 
 /* Function prototypes */
 void scan(char *nfile);
-int dial(char *number);
+int dial(char *number, int retry);
 void writefile(int last, int incr, char *nfile);
 void listgen(char *nmask, int incr, char *nfile);
 int initmodem(char * device);
 void closemodem(int fd);
+int hupmodem(int fd);
 void sendcmd(int fd, int timewait, char * fmt,...);
 void cleanup(int ignored);
 void fatalerr(char * pattern,...);
@@ -185,12 +188,11 @@ void scan(char *nfile) /* Scanner engine */
 	fprintf(stdout, "%s[*]%s Starting scan engine...\n", BRIGHT, NORMAL);
 	fprintf(stdout, "%s[*]%s Resetting modem...\n", BRIGHT, NORMAL);
 
-        sendcmd(fd, 1, "ATZ\r");
+	sendcmd(fd, 2, "ATZ\r");
 
 	fprintf(stdout, "%s[*]%s Done.                         \n\n", BRIGHT, NORMAL);
-	fprintf(stdout, "%s[*]%s Scan starting...                      \n", BRIGHT, NORMAL);
+	fprintf(stdout, "%s[*]%s Starting scan.                        \n", BRIGHT, NORMAL);
 
-                    
 /* Parse the numbers file */
 	while (size) {
 
@@ -219,20 +221,20 @@ void scan(char *nfile) /* Scanner engine */
 /* Dial the number, if not already scanned */
 		if (!strcmp(status, "UNSCANNED")) {
 
-			result = dial(n);
+			result = dial(n, MAX_RETRIES);
 
                 	switch (result) {
 			case 1:
 				fseek(f, -10, SEEK_CUR);
-				fwrite("CONNECT  ", 9, 1, f);
+				fwrite("CONNECT  \n", 10, 1, f);
 				break;
 			case 2:
 				fseek(f, -10, SEEK_CUR);
-                        	fwrite("BUSY     ", 9, 1, f);
+                        	fwrite("BUSY     \n", 10, 1, f);
 				break;
 			case 3:
 				fseek(f, -10, SEEK_CUR);
-                        	fwrite("TIMEOUT  ", 9, 1, f);
+                        	fwrite("-        \n", 10, 1, f);
 				break;
 			}			
 		}
@@ -242,7 +244,7 @@ void scan(char *nfile) /* Scanner engine */
 	}
 
 /* Scan finished */
-	fprintf(stdout, "%s[*]%s Scan terminated.                    \n\n",
+	fprintf(stdout, "%s[*]%s Scan finished.                      \n\n",
 		BRIGHT, NORMAL);
 	sendcmd(fd, 1, "+++ATH0\r");
 	sendcmd(fd, 1, "ATZ\r");
@@ -253,7 +255,7 @@ void scan(char *nfile) /* Scanner engine */
 
 
 
-int dial(char *number) /* Actually dial a phone number */
+int dial(char *number, int retry) /* Actually dial a phone number */
 {
 
 /* 
@@ -261,13 +263,13 @@ int dial(char *number) /* Actually dial a phone number */
  *
  * 1) CONNECT
  * 2) BUSY
- * 3) Timeout
+ * 3) NO ANSWER
  * 4) EOF
  *
  */
 
 	char buf[24];
-	int i, rd;
+	int i;
 
         bzero(buf, sizeof(buf));
 
@@ -276,27 +278,34 @@ int dial(char *number) /* Actually dial a phone number */
 
 /* Modem hangup */
 	fprintf(stdout, "Hanging up...             \r");
-	sendcmd(fd, 1, "ATH0\r");
+
+	if (!hupmodem(fd)) { /* FIXME: ugly hack for a better error handling */
+		if (!hupmodem(fd))	
+			fatalerr("err: %s not responding", MODEM_DEV);
+	}
 
         fprintf(stdout, "Dialing: %s (%i)        \r", number, timeout);
 	
 /* Create dial command string */
-	sendcmd(fd, 1, "ATM0DT%s\r", number); /* modem volume set to 0 */
+	sendcmd(fd, 2, "ATM0DT%s\r", number); /* modem volume set to 0 */
 
 	for (i = timeout; i > 0; i--) {
 
-		fprintf(stdout, "Dialing: %s (%i)    \r",number,i);
+		fprintf(stdout, "Dialing: %s (%i)    \r", number, i);
 
-		if ((rd = read(fd, buf, 23))) {
+/* Read modem output */
+		if (read(fd, buf, 23)) {
+
 
 			if (strstr(buf, "CONNECT") != NULL) {
 				fprintf(stdout, "%sCONNECT: %s\n%s", 
 					GREEN, number, NORMAL);
 
-				sendcmd(fd, 1, "+++");
+				sendcmd(fd, 2, "+++");
 
 				return(1); /* CONNECT */
 			}
+
 
 			if (strstr(buf, "BUSY") != NULL) {
 				fprintf(stdout, "%sBUSY:    %s\n%s", 
@@ -305,13 +314,33 @@ int dial(char *number) /* Actually dial a phone number */
 				return(2); /* BUSY */
 			}
 
-			if ((strstr(buf, "NO") != NULL) && (timeout - i < 3))
-				fatalerr("err: NO CARRIER, possible line problem?"); /* Line problems */
+/* Speed hacks */
+			if (strstr(buf, "NO") != NULL) {
+
+				if (timeout - i < 3) { /* Line problems */
+
+					/* Error */
+					if (!retry)
+						fatalerr("err: NO CARRIER. Line problem?");
+
+					/* Retry */
+					fprintf(stdout, "RETRY:   %s\n",number);
+					return(dial(number, retry - 1));
+
+				} else 
+
+					return(3); /* NO ANSWER */
+			}
+
+
+			if (strstr(buf, "OK") != NULL)
+
+				return(3); /* NO ANSWER */
 
 		}
 		sleep(1);
 	}											
-	return(3); /* Timeout */
+	return(3); /* NO ANSWER */
 }	
 
 
@@ -480,6 +509,22 @@ void closemodem(int fd) /* Close modem device */
 }
 
 
+int hupmodem(int fd) /* Hangup line and check modem response */
+{
+	char buf[24];
+
+	bzero(buf, sizeof(buf));
+
+	sendcmd(fd, 2, "ATH0\r");
+	read(fd, buf, 23);
+
+	if (strstr(buf, "OK") == NULL)
+		return(0); /* ERROR: modem is not responding */
+
+	return(1); /* OK: modem connected */
+}
+
+
 
 void sendcmd(int fd, int timewait, char * fmt,...) /* Send command to modem */
 {
@@ -540,20 +585,20 @@ void fatalerr(char * pattern,...) /* Error handling routine */
 void usage(char * name) /* Print usage */
 {
         fprintf (stderr, 
-		"%sUsage%s:\n"
-		"\t%s -g <file> -n <nmask> [-r]\t(Generation mode)\n"
-        	"\t%s -s <file> [-t <timeout>] \t(Scan mode)\n\n", 
+		"%susage%s:\n"
+		"\t%s -g <file> -n <nmask> [-r]\t(generation mode)\n"
+        	"\t%s -s <file> [-t <timeout>] \t(scan mode)\n\n", 
 		BRIGHT, NORMAL, name, name);
 
         fprintf (stderr,
-		"%sGeneration mode%s:\n"
+		"%sgeneration mode%s:\n"
                 "\t-g  generate number list and save it to file\n"
                 "\t-n  number mask to be used in generation mode\n"
                 "\t-r  toggle random mode ON\n\n"
-		"%sScan mode%s:\n"
+		"%sscan mode%s:\n"
                 "\t-s  scan a list of phone numbers from file\n"
                 "\t-t  set the modem timeout (default=%dsecs)\n\n"
-		"%sHelp%s:\n"
+		"%shelp%s:\n"
                 "\t-h  print this help\n\n", BRIGHT, NORMAL, BRIGHT, NORMAL, 
 		timeout, BRIGHT, NORMAL);
 
